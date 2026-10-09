@@ -420,6 +420,9 @@
     let currentRoomId = 'TEAM-888';
     let unsubscribeRoomListener = null;
 
+    // 本地持久化缓存存储 Key 前缀
+    const LOCAL_STORAGE_PREFIX = 'bingo_remote_room_';
+
     // 云端配置初始化
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'bingo-remote-app';
     let db = null;
@@ -436,8 +439,38 @@
       document.getElementById('inputRoomId').value = currentRoomId;
     }
 
-    // 初始化云端数据系统
+    // 从本地读取房间数据（刷新保留核心逻辑）
+    function loadLocalRoomState(roomId) {
+      try {
+        const raw = localStorage.getItem(LOCAL_STORAGE_PREFIX + roomId);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return parsed.claims || {};
+        }
+      } catch (e) {
+        console.warn('读取本地记录失败', e);
+      }
+      return {};
+    }
+
+    // 保存房间数据到本地（防刷新丢失）
+    function saveLocalRoomState(roomId, claims) {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_PREFIX + roomId, JSON.stringify({
+          claims: claims,
+          updatedAt: new Date().toISOString()
+        }));
+      } catch (e) {
+        console.warn('本地保存异常', e);
+      }
+    }
+
+    // 初始化云端数据系统与本地兜底
     async function initCloudSync() {
+      // 优先从本地存储恢复上一次的数据，杜绝刷新白屏清空
+      gameState.claims = loadLocalRoomState(currentRoomId);
+      renderBingoMatrix();
+
       try {
         if (typeof __firebase_config !== 'undefined') {
           const firebaseConfig = JSON.parse(__firebase_config);
@@ -457,16 +490,33 @@
           }
           listenToRoom(currentRoomId);
         } else {
-          // 本地单机降级模式 (当未注入配置时保持完整运行)
-          updateSyncStatus('本地单机离线模式', false);
-          document.getElementById('currentUserIdText').textContent = 'guest-' + Math.random().toString(36).substring(2, 8);
-          renderBingoMatrix();
+          // GitHub Pages / 本地运行模式：启用本地存储与多窗口广播同步
+          setupLocalMultiTabSync();
         }
       } catch (err) {
         console.error('云端初始化提示:', err);
-        updateSyncStatus('离线单机模式运行', false);
-        renderBingoMatrix();
+        setupLocalMultiTabSync();
       }
+    }
+
+    // 针对纯前端部署（如 GitHub Pages）的多标签页 / 本地持久化模式
+    function setupLocalMultiTabSync() {
+      updateSyncStatus(`本地已安全持久化 [${currentRoomId}]`, true);
+      const localUid = localStorage.getItem('bingo_local_uid') || ('user_' + Math.random().toString(36).substring(2, 7));
+      localStorage.setItem('bingo_local_uid', localUid);
+      document.getElementById('currentUserIdText').textContent = localUid;
+
+      // 监听跨标签页同房间数据变更（同台电脑多窗口测试可实时联动）
+      window.addEventListener('storage', (e) => {
+        if (e.key === LOCAL_STORAGE_PREFIX + currentRoomId && e.newValue) {
+          try {
+            const data = JSON.parse(e.newValue);
+            gameState.claims = data.claims || {};
+            renderBingoMatrix();
+            showToast('已同步其他窗口的最新打卡！');
+          } catch (err) {}
+        }
+      });
     }
 
     function updateSyncStatus(msg, isOnline) {
@@ -496,20 +546,29 @@
         if (docSnap.exists()) {
           const data = docSnap.data();
           gameState.claims = data.claims || {};
+          // 同时备份到本地
+          saveLocalRoomState(roomId, gameState.claims);
         } else {
-          gameState.claims = {};
+          // 云端无数据时，如果本地有数据，则将本地数据同步上云
+          if (Object.keys(gameState.claims).length > 0) {
+            syncStateToCloud();
+          }
         }
         renderBingoMatrix();
       }, (error) => {
         console.error('房间监听错误:', error);
-        updateSyncStatus('同步连接异常，重试中', false);
+        updateSyncStatus(`离线本地保护 [${roomId}]`, true);
       });
     }
 
-    // 保存战局至云端
+    // 保存战局至本地与云端
     async function syncStateToCloud() {
+      // 1. 无论网络与配置如何，首先即时写入本地存储，确保刷新绝对不丢！
+      saveLocalRoomState(currentRoomId, gameState.claims);
+      renderBingoMatrix();
+
+      // 2. 若存在云数据库则同步上云
       if (!db || !currentUser) {
-        renderBingoMatrix();
         return;
       }
       try {
@@ -521,7 +580,7 @@
         }, { merge: true });
       } catch (err) {
         console.error('数据提交失败:', err);
-        showToast('提交失败，请检查网络');
+        showToast('云端保存受阻，已妥善保存到当前设备本地');
       }
     }
 
@@ -537,7 +596,15 @@
       url.searchParams.set('room', currentRoomId);
       window.history.replaceState({}, '', url.toString());
 
-      listenToRoom(currentRoomId);
+      // 换房间时重新加载对应房间的本地记录
+      gameState.claims = loadLocalRoomState(currentRoomId);
+      renderBingoMatrix();
+
+      if (db && currentUser) {
+        listenToRoom(currentRoomId);
+      } else {
+        updateSyncStatus(`本地已安全持久化 [${currentRoomId}]`, true);
+      }
       showToast(`已切换至房间：${currentRoomId}`);
     };
 
@@ -857,6 +924,7 @@
 
     window.executeReset = function() {
       gameState.claims = {};
+      saveLocalRoomState(currentRoomId, {});
       syncStateToCloud();
       closeResetModal();
       showToast('战局已成功清空重置！全员已同步');
