@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>异地3人组 4x4 抢占式 Bingo 打卡大作战</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800;900&family=Noto+Sans+SC:wght@500;700;900&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            team1: { DEFAULT: '#FF477E', light: '#FFF0F5', border: '#FF2A6D' },
+            team2: { DEFAULT: '#00B894', light: '#E8F8F5', border: '#009475' },
+            team3: { DEFAULT: '#0984E3', light: '#EAF2FB', border: '#0267B5' }
+          },
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', '"Noto Sans SC"', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background: radial-gradient(circle at 15% 15%, #FFF6EE 0%, #F0F7FF 55%, #FBF0FF 100%);
+      min-height: 100vh;
+    }
+
+    /* 4x4 正方形宫格比例 */
+    .bingo-cell {
+      aspect-ratio: 1 / 1;
+    }
+
+    /* 3D 翻转卡片核心动画 */
+    .perspective-container {
+      perspective: 1000px;
+    }
+    .card-flipper {
+      transform-style: preserve-3d;
+      transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .face-hidden {
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+    }
+    .flipped {
+      transform: rotateY(180deg);
+    }
+
+    /* 连线高亮闪烁效果 */
+    @keyframes lineWinningGlow {
+      0%, 100% {
+        box-shadow: 0 0 0 3px #F59E0B, 0 10px 25px -3px rgba(245, 158, 11, 0.45);
+        transform: translateY(-2px) scale(1.02);
+      }
+      50% {
+        box-shadow: 0 0 0 5px #FBBF24, 0 15px 30px -3px rgba(251, 191, 36, 0.65);
+        transform: translateY(-4px) scale(1.04);
+      }
+    }
+    .winning-tile {
+      animation: lineWinningGlow 1.8s infinite ease-in-out;
+      border-color: #F59E0B !important;
+      z-index: 20;
+    }
+  </style>
+</head>
+<body class="font-sans text-slate-800 antialiased pb-12 selection:bg-amber-300 selection:text-amber-950">
+
+  <div class="max-w-4xl mx-auto px-3 sm:px-6 pt-5 sm:pt-8">
+
+    <!-- 顶部标题栏 -->
+    <header class="text-center mb-6">
+      <div class="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-orange-100/80 border border-orange-200 text-orange-600 text-xs sm:text-sm font-extrabold mb-2 shadow-sm">
+        <i class="fa-solid fa-fire text-amber-500 animate-pulse"></i> 异地3人组 · 4x4 资源抢占 Bingo
+      </div>
+      <h1 class="text-2xl sm:text-4xl font-black tracking-tight text-slate-900 mb-2">
+        团队 <span class="bg-gradient-to-r from-orange-500 via-rose-500 to-indigo-600 bg-clip-text text-transparent">BINGO 连线</span> 大作战
+      </h1>
+      <p class="text-xs sm:text-sm text-slate-600 font-medium max-w-lg mx-auto">
+        三个异地队伍角逐 16 个能量格子！首个连通 <span class="font-extrabold text-orange-600 underline decoration-amber-400">横/竖/斜 4 连线</span> 的队伍夺得冠军 🏆
+      </p>
+
+      <!-- 快捷操作栏与房间联机卡片 -->
+      <div class="mt-4 max-w-xl mx-auto bg-white/90 backdrop-blur-md p-3 sm:p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
+        <!-- 房间号控制 -->
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+          <span class="text-xs font-black text-slate-500 shrink-0"><i class="fa-solid fa-satellite-dish text-emerald-500 mr-1 animate-pulse"></i>房间号:</span>
+          <input id="inputRoomId" type="text" value="TEAM-888" maxlength="16" class="w-28 sm:w-32 uppercase bg-slate-50 border border-slate-200 px-2.5 py-1 text-xs font-black text-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400 transition" />
+          <button onclick="changeRoom()" class="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition shadow-sm">
+            进入
+          </button>
+          <button onclick="copyShareLink()" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1" title="复制多人联机邀请链接">
+            <i class="fa-regular fa-copy"></i>
+            <span class="hidden sm:inline">复制链接</span>
+          </button>
+        </div>
+
+        <!-- 战局控制按钮 -->
+        <div class="flex items-center gap-2 shrink-0">
+          <button onclick="openRulesModal()" class="px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-orange-50 border border-slate-200 text-xs font-bold text-slate-700 hover:text-orange-600 transition flex items-center gap-1.5">
+            <i class="fa-solid fa-circle-question text-orange-500"></i> 规则
+          </button>
+          <button onclick="openResetModal()" class="px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-rose-50 border border-slate-200 text-xs font-bold text-slate-500 hover:text-rose-600 transition flex items-center gap-1.5">
+            <i class="fa-solid fa-arrow-rotate-right text-slate-400"></i> 重置
+          </button>
+        </div>
+      </div>
+
+      <!-- 实时联机连接状态与在线信息条 -->
+      <div class="mt-2.5 flex items-center justify-center gap-3 text-[11px] font-bold text-slate-500">
+        <span class="inline-flex items-center gap-1.5">
+          <span id="syncStatusDot" class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+          <span id="syncStatusText" class="text-emerald-700">云端联机同步中</span>
+        </span>
+        <span>•</span>
+        <span class="truncate max-w-[200px]" title="当前设备用户 ID">玩家ID: <span id="currentUserIdText" class="font-mono text-slate-600">--</span></span>
+      </div>
+    </header>
+
+    <!-- 队伍实时战况计分板 -->
+    <div class="grid grid-cols-3 gap-2.5 sm:gap-4 mb-5">
+      <!-- 队伍 A: 烈焰 -->
+      <div id="cardTeam1" onclick="switchActiveTeam(1)" class="cursor-pointer bg-white rounded-2xl p-3 sm:p-4 border-2 transition-all relative shadow-sm hover:shadow-md">
+        <div class="flex items-center justify-between mb-1.5">
+          <div class="flex items-center gap-2">
+            <span class="w-8 h-8 rounded-xl bg-team1 text-white flex items-center justify-center font-black text-sm shadow-sm">A</span>
+            <div>
+              <h3 class="font-black text-xs sm:text-sm text-slate-800">队 A · 烈焰</h3>
+              <p class="text-[11px] text-slate-500">占领 <span id="teamCount1" class="font-black text-team1">0</span> 格</p>
+            </div>
+          </div>
+          <span id="badgeActive1" class="hidden px-2 py-0.5 rounded-full bg-team1 text-white text-[10px] font-black">当前队</span>
+        </div>
+        <div class="flex items-center justify-between text-[11px] pt-1.5 border-t border-slate-100">
+          <span class="text-slate-400">Bingo 连线</span>
+          <span id="teamLines1" class="font-black text-slate-700">0 条</span>
+        </div>
+      </div>
+
+      <!-- 队伍 B: 极光 -->
+      <div id="cardTeam2" onclick="switchActiveTeam(2)" class="cursor-pointer bg-white rounded-2xl p-3 sm:p-4 border-2 transition-all relative shadow-sm hover:shadow-md">
+        <div class="flex items-center justify-between mb-1.5">
+          <div class="flex items-center gap-2">
+            <span class="w-8 h-8 rounded-xl bg-team2 text-white flex items-center justify-center font-black text-sm shadow-sm">B</span>
+            <div>
+              <h3 class="font-black text-xs sm:text-sm text-slate-800">队 B · 极光</h3>
+              <p class="text-[11px] text-slate-500">占领 <span id="teamCount2" class="font-black text-team2">0</span> 格</p>
+            </div>
+          </div>
+          <span id="badgeActive2" class="hidden px-2 py-0.5 rounded-full bg-team2 text-white text-[10px] font-black">当前队</span>
+        </div>
+        <div class="flex items-center justify-between text-[11px] pt-1.5 border-t border-slate-100">
+          <span class="text-slate-400">Bingo 连线</span>
+          <span id="teamLines2" class="font-black text-slate-700">0 条</span>
+        </div>
+      </div>
+
+      <!-- 队伍 C: 沧海 -->
+      <div id="cardTeam3" onclick="switchActiveTeam(3)" class="cursor-pointer bg-white rounded-2xl p-3 sm:p-4 border-2 transition-all relative shadow-sm hover:shadow-md">
+        <div class="flex items-center justify-between mb-1.5">
+          <div class="flex items-center gap-2">
+            <span class="w-8 h-8 rounded-xl bg-team3 text-white flex items-center justify-center font-black text-sm shadow-sm">C</span>
+            <div>
+              <h3 class="font-black text-xs sm:text-sm text-slate-800">队 C · 沧海</h3>
+              <p class="text-[11px] text-slate-500">占领 <span id="teamCount3" class="font-black text-team3">0</span> 格</p>
+            </div>
+          </div>
+          <span id="badgeActive3" class="hidden px-2 py-0.5 rounded-full bg-team3 text-white text-[10px] font-black">当前队</span>
+        </div>
+        <div class="flex items-center justify-between text-[11px] pt-1.5 border-t border-slate-100">
+          <span class="text-slate-400">Bingo 连线</span>
+          <span id="teamLines3" class="font-black text-slate-700">0 条</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 盘面类型提示栏 -->
+    <div class="flex flex-wrap items-center justify-between gap-2 px-2 text-xs font-bold text-slate-600 mb-3">
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-slate-300"></span>🔒 独占格 (1队独占)</span>
+        <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>⚔️ 竞争格 (限2队抢)</span>
+        <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-sky-400"></span>🌐 公共格 (3队均可)</span>
+      </div>
+      <span class="text-amber-600 font-extrabold hidden sm:inline"><i class="fa-solid fa-hand-pointer"></i> 点击宫格可查看任务详情与打卡</span>
+    </div>
+
+    <!-- 4x4 标准正方形 Bingo 宫格主体 -->
+    <main class="w-full max-w-2xl mx-auto mb-6">
+      <div class="bg-white/90 backdrop-blur-xl p-2.5 sm:p-4 rounded-3xl shadow-xl border border-white/80">
+        <div id="bingoBoard" class="grid grid-cols-4 gap-2 sm:gap-3.5">
+          <!-- 16 个正方形宫格由 JS 动态生成 -->
+        </div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- 任务详细规则与 3D 翻转打卡弹窗 -->
+  <div id="taskModal" class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-3.5 sm:p-4 opacity-0 pointer-events-none transition-all duration-300">
+    <div class="relative w-full max-w-md perspective-container">
+      
+      <!-- 翻转容器 -->
+      <div id="flipperBox" class="card-flipper relative w-full min-h-[460px] bg-white rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-100 flex flex-col justify-between">
+        
+        <!-- 正面：详细打卡规则 -->
+        <div id="flipperFront" class="face-hidden flex flex-col justify-between h-full w-full">
+          <div>
+            <div class="flex items-center justify-between mb-3 pb-3 border-b border-slate-100">
+              <span id="mTaskNumber" class="text-xs font-mono font-black text-amber-600 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">#01</span>
+              <button onclick="closeTaskModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+
+            <h2 id="mTaskTitle" class="text-xl sm:text-2xl font-black text-slate-900 mb-2">任务名称</h2>
+            <div id="mTaskCapBadge" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold mb-4">
+              <!-- 容纳类别 -->
+            </div>
+
+            <div class="bg-amber-50/70 border border-amber-100 rounded-2xl p-4 mb-4">
+              <h4 class="text-xs font-black text-amber-800 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                <i class="fa-solid fa-circle-check text-amber-500"></i> 异地3人组打卡凭证要求
+              </h4>
+              <p id="mTaskDetail" class="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium">
+                详细要求描述...
+              </p>
+            </div>
+
+            <!-- 当前占领队伍状态 -->
+            <div>
+              <h4 class="text-xs font-bold text-slate-400 mb-2">已占领此格的队伍：</h4>
+              <div id="mClaimedContainer" class="flex flex-wrap gap-2 min-h-[32px] items-center">
+                <!-- 徽章插槽 -->
+              </div>
+            </div>
+          </div>
+
+          <div class="pt-4 border-t border-slate-100 flex items-center gap-2.5">
+            <button onclick="flipCard(true)" class="w-full py-2.5 px-4 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl font-black text-xs sm:text-sm shadow-md shadow-orange-200 transition flex items-center justify-center gap-2">
+              <i class="fa-solid fa-flag"></i> 翻转至打卡提交
+            </button>
+          </div>
+        </div>
+
+        <!-- 背面：提交打卡表单 -->
+        <div id="flipperBack" class="face-hidden flipped absolute inset-0 p-5 sm:p-6 w-full h-full flex flex-col justify-between bg-white rounded-3xl">
+          <div>
+            <div class="flex items-center justify-between mb-3 pb-3 border-b border-slate-100">
+              <button onclick="flipCard(false)" class="text-xs font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-lg">
+                <i class="fa-solid fa-arrow-left"></i> 返回任务规则
+              </button>
+              <button onclick="closeTaskModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+
+            <h3 class="text-lg font-black text-slate-900 mb-1">提交打卡记录</h3>
+            <p id="mActiveTeamHint" class="text-xs text-slate-500 mb-4 font-bold">
+              当前为【队 A · 烈焰】提交该格
+            </p>
+
+            <!-- 选择操作队伍 -->
+            <div class="mb-4">
+              <label class="block text-xs font-bold text-slate-700 mb-1.5">选择打卡队伍：</label>
+              <div class="grid grid-cols-3 gap-2" id="teamPickGroup">
+                <button type="button" onclick="selectFormTeam(1)" id="btnPick1" class="py-2 px-2 rounded-xl text-xs font-black border transition flex flex-col items-center gap-1">
+                  A 队 (烈焰)
+                </button>
+                <button type="button" onclick="selectFormTeam(2)" id="btnPick2" class="py-2 px-2 rounded-xl text-xs font-black border transition flex flex-col items-center gap-1">
+                  B 队 (极光)
+                </button>
+                <button type="button" onclick="selectFormTeam(3)" id="btnPick3" class="py-2 px-2 rounded-xl text-xs font-black border transition flex flex-col items-center gap-1">
+                  C 队 (沧海)
+                </button>
+              </div>
+            </div>
+
+            <!-- 凭证备注 -->
+            <div class="mb-3">
+              <label class="block text-xs font-bold text-slate-700 mb-1.5">打卡说明 / 凭证（可选）：</label>
+              <textarea id="mProofInput" rows="3" placeholder="例如：三人已于15:30完成视频合影干杯，并已发送群相册..." class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-300 transition resize-none"></textarea>
+            </div>
+
+            <div id="mClaimError" class="hidden p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold flex items-center gap-2">
+              <i class="fa-solid fa-circle-exclamation"></i>
+              <span id="mClaimErrorMsg">提示信息</span>
+            </div>
+          </div>
+
+          <div class="pt-3 border-t border-slate-100 flex items-center justify-end gap-2.5">
+            <button onclick="flipCard(false)" class="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 text-xs font-bold transition">
+              取消
+            </button>
+            <button id="btnSubmitClaim" onclick="submitCurrentClaim()" class="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs shadow-md shadow-emerald-200 transition">
+              确认打卡抢占
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- 规则弹窗 -->
+  <div id="rulesModal" class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-all duration-300">
+    <div class="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl relative max-h-[85vh] overflow-y-auto">
+      <button onclick="closeRulesModal()" class="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center transition">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+
+      <div class="flex items-center gap-2.5 mb-4">
+        <span class="w-9 h-9 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center text-lg font-black">
+          <i class="fa-solid fa-chess"></i>
+        </span>
+        <h3 class="text-xl font-black text-slate-900">4x4 Bingo 抢占赛规则</h3>
+      </div>
+
+      <div class="space-y-4 text-xs sm:text-sm text-slate-600 leading-relaxed border-t border-slate-100 pt-4">
+        <div class="p-3 bg-amber-50 rounded-2xl border border-amber-100">
+          <h4 class="font-black text-amber-800 mb-1">🎯 胜利目标</h4>
+          <p class="text-xs">率先在 4x4 宫格中形成 <strong class="text-orange-600">横、竖、斜 4 连线</strong> 的队伍获胜！</p>
+        </div>
+
+        <div>
+          <h4 class="font-black text-slate-800 mb-1.5">⚖️ 格子容量机制</h4>
+          <ul class="space-y-1.5 text-xs">
+            <li class="p-2 rounded-xl bg-slate-50 border border-slate-200/80"><strong>🔒 独占格 (12格)：</strong>容量为 1 队，先到先得。被抢占后其余队伍无法打卡。</li>
+            <li class="p-2 rounded-xl bg-amber-50 border border-amber-200/80"><strong>⚔️ 竞争格 (2格 - 穿搭/番茄钟)：</strong>容量为 2 队，仅限前 2 支队伍共同打卡。</li>
+            <li class="p-2 rounded-xl bg-sky-50 border border-sky-200/80"><strong>🌐 公共格 (2格 - 下午茶/吃同款)：</strong>正中心枢纽，全部 3 支队伍均可完成打卡，保障线路畅通！</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="mt-5 pt-3 border-t border-slate-100 text-right">
+        <button onclick="closeRulesModal()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 text-white font-bold text-xs shadow-md">
+          明白，开始比拼！
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 重置棋盘安全确认弹窗 (替代原生 confirm) -->
+  <div id="resetConfirmModal" class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-all duration-300">
+    <div class="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl relative text-center">
+      <div class="w-12 h-12 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center text-xl mx-auto mb-3">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+      </div>
+      <h3 class="text-base font-black text-slate-900 mb-1">确定要重置当前房间战局吗？</h3>
+      <p class="text-xs text-slate-500 mb-5">此操作将清空该房间所有队伍的抢占记录，异地所有成员都会同步清空。</p>
+      <div class="flex items-center justify-center gap-2">
+        <button onclick="closeResetModal()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 text-xs font-bold transition">
+          取消
+        </button>
+        <button onclick="executeReset()" class="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold shadow-md shadow-rose-200 transition">
+          确定重置全盘
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 消息提示组件 -->
+  <div id="toastBox" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-white border border-slate-200 shadow-2xl text-xs sm:text-sm font-bold text-slate-800">
+    <i id="toastIcon" class="fa-solid fa-circle-check text-emerald-500 text-base"></i>
+    <span id="toastText">提示内容</span>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // 16 个精心配置的异地 3 人任务
+    const TASKS = [
+      { id: 1, title: '萌宠/好物大赏', cap: 1, type: 'exclusive', detail: '三人同时在群里晒出自己养的宠物照片，或者最近买到的一个超值生活好物。' },
+      { id: 2, title: '健康喝水卡', cap: 1, type: 'exclusive', detail: '同一天内，三人互相提醒，各自完成 8 杯水（约 1.5L）的饮用并在群里发水杯/记录打卡。' },
+      { id: 3, title: '夸夸彩虹屁', cap: 1, type: 'exclusive', detail: '每人在群里 @另外两人，精准说出对方最近工作或生活中的 1 个优点或具体感谢事项。' },
+      { id: 4, title: '工位/书桌照', cap: 1, type: 'exclusive', detail: '三人同时在群里晒出自己当前的远程办公工位全景图（乱不乱无所谓，真实自然即可）。' },
+      { id: 5, title: '桌面清道夫', cap: 1, type: 'exclusive', detail: '三人同一天清理各自的电脑桌面或邮箱收件箱，并在群里发“清理后”无杂物的干净截图。' },
+      { id: 6, title: '云端下午茶', cap: 3, type: 'public', detail: '三人通过视频通话，在镜头前举起各自的饮料/奶茶/咖啡/酒杯，隔空相撞并截图合影。' },
+      { id: 7, title: '跨空吃同款', cap: 3, type: 'public', detail: '三人同一天的午餐或晚餐点同一种类型的食物（例如：都是汉堡/都是麻辣烫/都是寿司）。' },
+      { id: 8, title: '播放历史大曝光', cap: 1, type: 'exclusive', detail: '三人同时晒出自己视频软件（哔哩哔哩/抖音/YouTube 等）最近观看记录的前 3 条截图。' },
+      { id: 9, title: '步数接力', cap: 1, type: 'exclusive', detail: '三人同一天的微信步数或运动步数累计相加超过 25,000 步，晚上晒出排行榜截图。' },
+      { id: 10, title: '同款穿搭', cap: 2, type: 'competitive', detail: '约定一个穿搭主题（如“全黑系”、“纯白T恤”、“复古风”），三个人各自拍照拼成三联图。' },
+      { id: 11, title: '番茄钟连线', cap: 2, type: 'competitive', detail: '三人约定在同一个 25 分钟内开启番茄钟专注工作不发消息，计时结束后在群里打卡“完成”。' },
+      { id: 12, title: '同看一晚落日', cap: 1, type: 'exclusive', detail: '同一天拍下各自所在地当天的天空、夕阳或夜景，发到群里拼成一张氛围感三联图。' },
+      { id: 13, title: '同款早起打卡', cap: 1, type: 'exclusive', detail: '连续 2 天，三人在早上 8:00 前都在群里发送一个特定的“早起加油”表情包。' },
+      { id: 14, title: '背景墙连连看', cap: 1, type: 'exclusive', detail: '三人在进行视频连线或开会时，统一换上同一个搞笑或有趣的虚拟背景并截图留念。' },
+      { id: 15, title: '灵魂画手绘制', cap: 1, type: 'exclusive', detail: '每人用手机画板或纸笔，凭印象花 1 分钟画出另外两人的卡通/抽象头像并晒在群里。' },
+      { id: 16, title: '云端合唱', cap: 1, type: 'exclusive', detail: '使用 K 歌软件或视频连线，三人合唱同一首歌，录下至少 30 秒片段音频或视频。' }
+    ];
+
+    // 队伍配置
+    const TEAMS = {
+      1: { id: 1, name: '队 A · 烈焰', code: 'A', bg: 'bg-team1', text: 'text-team1', border: 'border-team1', light: 'bg-pink-50' },
+      2: { id: 2, name: '队 B · 极光', code: 'B', bg: 'bg-team2', text: 'text-team2', border: 'border-team2', light: 'bg-emerald-50' },
+      3: { id: 3, name: '队 C · 沧海', code: 'C', bg: 'bg-team3', text: 'text-team3', border: 'border-team3', light: 'bg-sky-50' }
+    };
+
+    // 4x4 连线胜利组合（共 10 条）
+    const WINNING_LINES = [
+      [0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15],
+      [0, 4, 8, 12], [1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15],
+      [0, 5, 10, 15], [3, 6, 9, 12]
+    ];
+
+    // 内存数据与联机状态
+    let gameState = { claims: {} };
+    let activeTeamId = 1;
+    let currentModalTaskId = null;
+    let modalSelectedTeam = 1;
+    let currentRoomId = 'TEAM-888';
+    let unsubscribeRoomListener = null;
+
+    // 云端配置初始化
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'bingo-remote-app';
+    let db = null;
+    let auth = null;
+    let currentUser = null;
+
+    // 解析 URL 参数中的房间号
+    function initRoomIdFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const roomParam = params.get('room');
+      if (roomParam) {
+        currentRoomId = roomParam.trim().toUpperCase();
+      }
+      document.getElementById('inputRoomId').value = currentRoomId;
+    }
+
+    // 初始化云端数据系统
+    async function initCloudSync() {
+      try {
+        if (typeof __firebase_config !== 'undefined') {
+          const firebaseConfig = JSON.parse(__firebase_config);
+          const app = initializeApp(firebaseConfig);
+          db = getFirestore(app);
+          auth = getAuth(app);
+
+          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            await signInWithCustomToken(auth, __initial_auth_token);
+          } else {
+            await signInAnonymously(auth);
+          }
+
+          currentUser = auth.currentUser;
+          if (currentUser) {
+            document.getElementById('currentUserIdText').textContent = currentUser.uid;
+          }
+          listenToRoom(currentRoomId);
+        } else {
+          // 本地单机降级模式 (当未注入配置时保持完整运行)
+          updateSyncStatus('本地单机离线模式', false);
+          document.getElementById('currentUserIdText').textContent = 'guest-' + Math.random().toString(36).substring(2, 8);
+          renderBingoMatrix();
+        }
+      } catch (err) {
+        console.error('云端初始化提示:', err);
+        updateSyncStatus('离线单机模式运行', false);
+        renderBingoMatrix();
+      }
+    }
+
+    function updateSyncStatus(msg, isOnline) {
+      const text = document.getElementById('syncStatusText');
+      const dot = document.getElementById('syncStatusDot');
+      text.textContent = msg;
+      if (isOnline) {
+        text.className = 'text-emerald-700';
+        dot.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-ping';
+      } else {
+        text.className = 'text-amber-700';
+        dot.className = 'w-2 h-2 rounded-full bg-amber-500';
+      }
+    }
+
+    // 监听指定房间
+    function listenToRoom(roomId) {
+      if (!db || !currentUser) return;
+      if (unsubscribeRoomListener) {
+        unsubscribeRoomListener();
+      }
+
+      updateSyncStatus(`已接入房间 [${roomId}]`, true);
+      const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
+
+      unsubscribeRoomListener = onSnapshot(roomDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          gameState.claims = data.claims || {};
+        } else {
+          gameState.claims = {};
+        }
+        renderBingoMatrix();
+      }, (error) => {
+        console.error('房间监听错误:', error);
+        updateSyncStatus('同步连接异常，重试中', false);
+      });
+    }
+
+    // 保存战局至云端
+    async function syncStateToCloud() {
+      if (!db || !currentUser) {
+        renderBingoMatrix();
+        return;
+      }
+      try {
+        const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomId);
+        await setDoc(roomDocRef, {
+          claims: gameState.claims,
+          updatedAt: new Date().toISOString(),
+          lastActorId: currentUser.uid
+        }, { merge: true });
+      } catch (err) {
+        console.error('数据提交失败:', err);
+        showToast('提交失败，请检查网络');
+      }
+    }
+
+    // 切换/进入房间
+    window.changeRoom = function() {
+      const val = document.getElementById('inputRoomId').value.trim().toUpperCase();
+      if (!val) {
+        showToast('请输入有效的房间号！');
+        return;
+      }
+      currentRoomId = val;
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', currentRoomId);
+      window.history.replaceState({}, '', url.toString());
+
+      listenToRoom(currentRoomId);
+      showToast(`已切换至房间：${currentRoomId}`);
+    };
+
+    // 复制多人联机邀请链接
+    window.copyShareLink = function() {
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', currentRoomId);
+      const fullUrl = url.toString();
+
+      const tempInput = document.createElement('input');
+      tempInput.value = fullUrl;
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      try {
+        document.execCommand('copy');
+        showToast(`🔗 房间【${currentRoomId}】邀请链接已复制！`);
+      } catch (e) {
+        showToast('复制失败，请手动复制浏览器地址栏');
+      }
+      document.body.removeChild(tempInput);
+    };
+
+    // 切换当前激活队伍
+    window.switchActiveTeam = function(teamId) {
+      activeTeamId = teamId;
+      [1, 2, 3].forEach(id => {
+        const card = document.getElementById(`cardTeam${id}`);
+        const badge = document.getElementById(`badgeActive${id}`);
+        if (id === teamId) {
+          card.classList.add('border-slate-800', 'shadow-md', 'scale-[1.02]');
+          card.classList.remove('border-transparent');
+          badge.classList.remove('hidden');
+        } else {
+          card.classList.remove('border-slate-800', 'shadow-md', 'scale-[1.02]');
+          card.classList.add('border-transparent');
+          badge.classList.add('hidden');
+        }
+      });
+    };
+
+    // 渲染 4x4 Bingo 棋盘
+    function renderBingoMatrix() {
+      const board = document.getElementById('bingoBoard');
+      board.innerHTML = '';
+      const winningTileIndices = calculateWinningIndices();
+
+      TASKS.forEach((task, index) => {
+        const claims = gameState.claims[task.id] || [];
+        const isWinning = winningTileIndices.includes(index);
+
+        let capBadgeHtml = '';
+        if (task.cap === 1) {
+          capBadgeHtml = `<span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">🔒 1/1</span>`;
+        } else if (task.cap === 2) {
+          capBadgeHtml = `<span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">⚔️ ${claims.length}/2</span>`;
+        } else {
+          capBadgeHtml = `<span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-800">🌐 ${claims.length}/3</span>`;
+        }
+
+        let stampsHtml = '';
+        if (claims.length > 0) {
+          stampsHtml = `<div class="flex items-center justify-center gap-1">`;
+          claims.forEach(c => {
+            const t = TEAMS[c.teamId];
+            stampsHtml += `
+              <span class="w-5 h-5 rounded-lg ${t.bg} text-white font-black text-[10px] flex items-center justify-center shadow-sm">
+                ${t.code}
+              </span>
+            `;
+          });
+          stampsHtml += `</div>`;
+        } else {
+          stampsHtml = `<span class="text-[10px] text-slate-300 font-bold">待打卡</span>`;
+        }
+
+        const cell = document.createElement('div');
+        cell.onclick = () => openTaskModal(task.id);
+        cell.className = `bingo-cell relative rounded-2xl p-2 sm:p-2.5 flex flex-col justify-between cursor-pointer border-2 bg-white transition-all duration-200 hover:-translate-y-1 hover:shadow-lg select-none ${
+          isWinning ? 'winning-tile' : 'border-slate-100 shadow-sm'
+        }`;
+
+        cell.innerHTML = `
+          <div class="flex items-center justify-between gap-1">
+            <span class="text-[10px] font-black font-mono text-slate-400">#${index + 1 < 10 ? '0' + (index + 1) : index + 1}</span>
+            ${capBadgeHtml}
+          </div>
+          <div class="my-auto text-center px-0.5">
+            <h4 class="font-extrabold text-[11px] sm:text-xs text-slate-800 leading-snug line-clamp-2">
+              ${task.title}
+            </h4>
+          </div>
+          <div class="pt-1 border-t border-slate-50 text-center min-h-[22px] flex items-center justify-center">
+            ${stampsHtml}
+          </div>
+        `;
+
+        board.appendChild(cell);
+      });
+
+      updateScoreboard();
+    }
+
+    window.openTaskModal = function(taskId) {
+      currentModalTaskId = taskId;
+      modalSelectedTeam = activeTeamId;
+      const task = TASKS.find(t => t.id === taskId);
+      const claims = gameState.claims[taskId] || [];
+
+      flipCard(false);
+
+      document.getElementById('mTaskNumber').textContent = `#${task.id < 10 ? '0' + task.id : task.id}`;
+      document.getElementById('mTaskTitle').textContent = task.title;
+      document.getElementById('mTaskDetail').textContent = task.detail;
+
+      const capBox = document.getElementById('mTaskCapBadge');
+      if (task.cap === 1) {
+        capBox.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-100 text-slate-700';
+        capBox.innerHTML = '<i class="fa-solid fa-lock text-slate-500"></i> 独占格：仅限 1 支队伍打卡抢占';
+      } else if (task.cap === 2) {
+        capBox.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200';
+        capBox.innerHTML = `<i class="fa-solid fa-swords text-amber-600"></i> 竞争格：仅限前 2 支队伍 (当前 ${claims.length}/2)`;
+      } else {
+        capBox.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold bg-sky-100 text-sky-800 border border-sky-200';
+        capBox.innerHTML = `<i class="fa-solid fa-globe text-sky-600"></i> 公共格：所有 3 队均可打卡 (当前 ${claims.length}/3)`;
+      }
+
+      const claimedBox = document.getElementById('mClaimedContainer');
+      claimedBox.innerHTML = '';
+      if (claims.length === 0) {
+        claimedBox.innerHTML = '<span class="text-xs text-slate-400">虚位以待，快来抢占第一张凭证！</span>';
+      } else {
+        claims.forEach(c => {
+          const t = TEAMS[c.teamId];
+          const badge = document.createElement('div');
+          badge.className = `inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl ${t.light} ${t.text} text-xs font-black border border-current`;
+          badge.innerHTML = `
+            <i class="fa-solid fa-circle-check"></i>
+            <span>${t.name}</span>
+            <button onclick="removeClaim(${taskId}, ${c.teamId})" class="ml-1 opacity-70 hover:opacity-100 hover:text-rose-600" title="撤销打卡">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          `;
+          claimedBox.appendChild(badge);
+        });
+      }
+
+      updateModalFormUI();
+
+      const modal = document.getElementById('taskModal');
+      modal.classList.remove('opacity-0', 'pointer-events-none');
+    };
+
+    window.closeTaskModal = function() {
+      const modal = document.getElementById('taskModal');
+      modal.classList.add('opacity-0', 'pointer-events-none');
+    };
+
+    window.flipCard = function(toBack) {
+      const flipper = document.getElementById('flipperBox');
+      if (toBack) {
+        flipper.classList.add('flipped');
+        updateModalFormUI();
+      } else {
+        flipper.classList.remove('flipped');
+      }
+    };
+
+    window.selectFormTeam = function(teamId) {
+      modalSelectedTeam = teamId;
+      updateModalFormUI();
+    };
+
+    function updateModalFormUI() {
+      const task = TASKS.find(t => t.id === currentModalTaskId);
+      const claims = gameState.claims[currentModalTaskId] || [];
+
+      document.getElementById('mActiveTeamHint').textContent = `当前为【${TEAMS[modalSelectedTeam].name}】进行打卡确认`;
+
+      const errBox = document.getElementById('mClaimError');
+      const submitBtn = document.getElementById('btnSubmitClaim');
+      const alreadyClaimed = claims.some(c => c.teamId === modalSelectedTeam);
+      const isFull = claims.length >= task.cap;
+
+      [1, 2, 3].forEach(id => {
+        const btn = document.getElementById(`btnPick${id}`);
+        const t = TEAMS[id];
+        const isTeamClaimed = claims.some(c => c.teamId === id);
+
+        if (id === modalSelectedTeam) {
+          btn.className = `py-2 px-2 rounded-xl text-xs font-black border-2 ${t.border} ${t.light} ${t.text} shadow-sm`;
+        } else if (isTeamClaimed) {
+          btn.className = `py-2 px-2 rounded-xl text-xs font-black border border-slate-200 bg-slate-100 text-slate-400 opacity-60`;
+        } else {
+          btn.className = `py-2 px-2 rounded-xl text-xs font-black border border-slate-200 text-slate-600 hover:bg-slate-50`;
+        }
+      });
+
+      if (alreadyClaimed) {
+        errBox.classList.remove('hidden');
+        document.getElementById('mClaimErrorMsg').textContent = '该队伍已完成该格打卡，无需重复提交！';
+        submitBtn.disabled = true;
+        submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      } else if (isFull) {
+        errBox.classList.remove('hidden');
+        document.getElementById('mClaimErrorMsg').textContent = `该格容量已满 (${task.cap} 队已抢占)！`;
+        submitBtn.disabled = true;
+        submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      } else {
+        errBox.classList.add('hidden');
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
+    }
+
+    window.submitCurrentClaim = function() {
+      const task = TASKS.find(t => t.id === currentModalTaskId);
+      const claims = gameState.claims[currentModalTaskId] || [];
+
+      if (claims.some(c => c.teamId === modalSelectedTeam) || claims.length >= task.cap) {
+        return;
+      }
+
+      if (!gameState.claims[currentModalTaskId]) {
+        gameState.claims[currentModalTaskId] = [];
+      }
+
+      const proof = document.getElementById('mProofInput').value.trim();
+      gameState.claims[currentModalTaskId].push({
+        teamId: modalSelectedTeam,
+        proof: proof || '群内已核验凭证',
+        time: new Date().toLocaleTimeString(),
+        userId: currentUser?.uid || 'anonymous'
+      });
+
+      document.getElementById('mProofInput').value = '';
+      syncStateToCloud();
+      closeTaskModal();
+      showToast(`🎉 恭喜【${TEAMS[modalSelectedTeam].name}】成功抢占该格！已同步所有异地队友`);
+
+      confetti({ particleCount: 70, spread: 60, origin: { y: 0.65 } });
+    };
+
+    window.removeClaim = function(taskId, teamId) {
+      if (gameState.claims[taskId]) {
+        gameState.claims[taskId] = gameState.claims[taskId].filter(c => c.teamId !== teamId);
+        syncStateToCloud();
+        openTaskModal(taskId);
+        showToast(`已撤销该队伍的占领状态并同步全员`);
+      }
+    };
+
+    function countLinesForTeam(teamId) {
+      let count = 0;
+      WINNING_LINES.forEach(line => {
+        const full = line.every(idx => {
+          const taskId = TASKS[idx].id;
+          const claims = gameState.claims[taskId] || [];
+          return claims.some(c => c.teamId === teamId);
+        });
+        if (full) count++;
+      });
+      return count;
+    }
+
+    function calculateWinningIndices() {
+      const winSet = new Set();
+      [1, 2, 3].forEach(teamId => {
+        WINNING_LINES.forEach(line => {
+          const full = line.every(idx => {
+            const taskId = TASKS[idx].id;
+            const claims = gameState.claims[taskId] || [];
+            return claims.some(c => c.teamId === teamId);
+          });
+          if (full) {
+            line.forEach(i => winSet.add(i));
+          }
+        });
+      });
+      return Array.from(winSet);
+    }
+
+    function updateScoreboard() {
+      [1, 2, 3].forEach(teamId => {
+        let cellsCount = 0;
+        TASKS.forEach(t => {
+          const claims = gameState.claims[t.id] || [];
+          if (claims.some(c => c.teamId === teamId)) cellsCount++;
+        });
+
+        document.getElementById(`teamCount${teamId}`).textContent = cellsCount;
+        const lines = countLinesForTeam(teamId);
+        const lineEl = document.getElementById(`teamLines${teamId}`);
+        const prev = parseInt(lineEl.textContent || '0');
+        lineEl.textContent = `${lines} 条`;
+
+        if (lines > prev && prev >= 0) {
+          confetti({ particleCount: 160, spread: 90, origin: { y: 0.5 } });
+          showToast(`🏆 极棒！【${TEAMS[teamId].name}】连成 4 连线 Bingo！`);
+        }
+      });
+    }
+
+    window.openRulesModal = function() {
+      document.getElementById('rulesModal').classList.remove('opacity-0', 'pointer-events-none');
+    };
+    window.closeRulesModal = function() {
+      document.getElementById('rulesModal').classList.add('opacity-0', 'pointer-events-none');
+    };
+
+    // 重置弹窗控制
+    window.openResetModal = function() {
+      document.getElementById('resetConfirmModal').classList.remove('opacity-0', 'pointer-events-none');
+    };
+    window.closeResetModal = function() {
+      document.getElementById('resetConfirmModal').classList.add('opacity-0', 'pointer-events-none');
+    };
+
+    window.executeReset = function() {
+      gameState.claims = {};
+      syncStateToCloud();
+      closeResetModal();
+      showToast('战局已成功清空重置！全员已同步');
+    };
+
+    // Toast 提示
+    let toastTimer = null;
+    function showToast(msg) {
+      clearTimeout(toastTimer);
+      const toast = document.getElementById('toastBox');
+      document.getElementById('toastText').textContent = msg;
+      toast.classList.remove('translate-y-20', 'opacity-0');
+      toast.classList.add('translate-y-0', 'opacity-100');
+
+      toastTimer = setTimeout(() => {
+        toast.classList.remove('translate-y-0', 'opacity-100');
+        toast.classList.add('translate-y-20', 'opacity-0');
+      }, 2500);
+    }
+
+    // 初始化运行
+    window.addEventListener('DOMContentLoaded', () => {
+      initRoomIdFromUrl();
+      switchActiveTeam(1);
+      initCloudSync();
+    });
+  </script>
+</body>
+</html>
