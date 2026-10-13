@@ -373,11 +373,7 @@
     <span id="toastText">提示内容</span>
   </div>
 
-  <script type="module">
-    // 引入轻量级零配置公开分布式联机同步网络 (Gun.js 去中心化实时同步图数据库)
-    // 无需任何人注册账号或配置后端服务器，基于 WebSockets 自动在各端之间实时同步房间数据
-    import "https://cdn.jsdelivr.net/npm/gun/gun.js";
-
+  <script>
     // 16 个精心配置的异地 3 人任务
     const TASKS = [
       { id: 1, title: '萌宠/好物大赏', cap: 1, type: 'exclusive', detail: '三人同时在群里晒出自己养的宠物照片，或者最近买到的一个超值生活好物。' },
@@ -413,13 +409,13 @@
     ];
 
     // 状态数据
-    let gameState = { claims: {} };
+    let gameState = { claims: {}, updatedAt: 0 };
     let activeTeamId = 1;
     let currentModalTaskId = null;
     let modalSelectedTeam = 1;
     let currentRoomId = 'TEAM-888';
-    let gun = null;
-    let roomRef = null;
+    let eventSource = null;
+    let pollIntervalTimer = null;
 
     const LOCAL_STORAGE_PREFIX = 'bingo_remote_room_';
 
@@ -441,23 +437,23 @@
       document.getElementById('inputRoomId').value = currentRoomId;
     }
 
-    // 本地持久化支持（防断网/离线保护）
+    // 本地持久化支持
     function loadLocalRoomState(roomId) {
       try {
         const raw = localStorage.getItem(LOCAL_STORAGE_PREFIX + roomId);
         if (raw) {
           const parsed = JSON.parse(raw);
-          return parsed.claims || {};
+          return { claims: parsed.claims || {}, updatedAt: parsed.updatedAt || 0 };
         }
       } catch (e) {}
-      return {};
+      return { claims: {}, updatedAt: 0 };
     }
 
-    function saveLocalRoomState(roomId, claims) {
+    function saveLocalRoomState(roomId, claims, updatedAt) {
       try {
         localStorage.setItem(LOCAL_STORAGE_PREFIX + roomId, JSON.stringify({
           claims: claims,
-          updatedAt: new Date().toISOString()
+          updatedAt: updatedAt || Date.now()
         }));
       } catch (e) {}
     }
@@ -476,90 +472,156 @@
       }
     }
 
-    // 初始化公开云端实时通信网络（Gun Relay Peers）
-    function initRealtimeNetwork() {
-      // 1. 先用本地存储立即恢复界面，避免等待网络
-      gameState.claims = loadLocalRoomState(currentRoomId);
-      renderBingoMatrix();
+    // 获取当前房间在公共云端通道的 Topic 名字（带项目专属前缀防止撞名）
+    function getChannelTopic(roomId) {
+      const sanitized = roomId.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      return `bingo_gcamg_${sanitized || 'team888'}`;
+    }
 
-      try {
-        // 使用高质量的公开中继节点，保证异地跨网络（移动/电信/联通/海外）均可打通实时通道
-        const peers = [
-          'https://gun-manhattan.herokuapp.com/gun',
-          'https://peer.wallarm.com/gun',
-          'https://gundb.cloud/gun'
-        ];
-        gun = window.Gun ? window.Gun({ peers: peers, localStorage: false }) : null;
-
-        if (gun) {
-          subscribeToRoom(currentRoomId);
-        } else {
-          updateSyncStatus(`单机本地保护 [${currentRoomId}]`, false);
-        }
-      } catch (err) {
-        console.warn('实时信道初始化降级为本地:', err);
-        updateSyncStatus(`单机本地保护 [${currentRoomId}]`, false);
+    // 核心网络同步：建立 SSE 监听与云端拉取
+    function setupChannelConnection(roomId) {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+      if (pollIntervalTimer) {
+        clearInterval(pollIntervalTimer);
+        pollIntervalTimer = null;
       }
 
-      // 同台电脑多窗口测试监听
-      window.addEventListener('storage', (e) => {
-        if (e.key === LOCAL_STORAGE_PREFIX + currentRoomId && e.newValue) {
+      const topic = getChannelTopic(roomId);
+      updateSyncStatus(`正在连接房间 [${roomId}]...`, false);
+
+      // 1. 立即拉取最近的历史消息（确保刚打开或刷新的用户能读到最新战局）
+      fetchLatestHistory(topic, roomId);
+
+      // 2. 建立 SSE (Server-Sent Events) 实时长连接监听
+      try {
+        eventSource = new EventSource(`https://ntfy.sh/${topic}/sse`);
+        
+        eventSource.onopen = () => {
+          updateSyncStatus(`云端实时联机已就绪 [${roomId}]`, true);
+        };
+
+        eventSource.onmessage = (event) => {
+          if (!event.data) return;
           try {
-            const data = JSON.parse(e.newValue);
-            gameState.claims = data.claims || {};
-            renderBingoMatrix();
-          } catch (err) {}
-        }
-      });
+            const data = JSON.parse(event.data);
+            if (data.event === 'message' && data.message) {
+              handleIncomingMessage(data.message);
+            }
+          } catch (e) {
+            console.warn('解析实时消息异常:', e);
+          }
+        };
+
+        eventSource.onerror = () => {
+          updateSyncStatus(`实时连接恢复中... [${roomId}]`, false);
+        };
+      } catch (err) {
+        console.warn('SSE 建立失败，降级为轮询模式:', err);
+      }
+
+      // 3. 定时轮询兜底（每 8 秒拉取一次，防止某些移动端浏览器切后台后断开长连接）
+      pollIntervalTimer = setInterval(() => {
+        fetchLatestHistory(topic, roomId, true);
+      }, 8000);
     }
 
-    // 订阅当前房间的实时数据流
-    function subscribeToRoom(roomId) {
-      updateSyncStatus(`实时云端联机中 [${roomId}]`, true);
-      const appRoomKey = `bingo_v2_room_${roomId}`;
-      roomRef = gun.get('gcamg_bingo_hub').get(appRoomKey);
+    // 拉取历史消息
+    async function fetchLatestHistory(topic, roomId, isBackground = false) {
+      try {
+        const resp = await fetch(`https://ntfy.sh/${topic}/json?poll=1`);
+        if (!resp.ok) return;
+        const text = await resp.text();
+        const lines = text.trim().split('\n');
 
-      // 实时监听来自其他异地同事的变更广播
-      roomRef.on((data) => {
-        if (!data || !data.payload) return;
-        try {
-          const remoteState = JSON.parse(data.payload);
-          if (remoteState && typeof remoteState === 'object') {
-            // 如果数据确实有更新
-            const remoteStr = JSON.stringify(remoteState.claims || {});
-            const localStr = JSON.stringify(gameState.claims || {});
-            if (remoteStr !== localStr) {
-              gameState.claims = remoteState.claims || {};
-              saveLocalRoomState(roomId, gameState.claims);
-              renderBingoMatrix();
-              if (remoteState.senderId !== localUserId) {
-                showToast(`🔔 同事【${remoteState.senderTeamName || '队友'}】刚更新了棋盘！`);
+        let latestPayload = null;
+        for (const line of lines) {
+          if (!line) continue;
+          try {
+            const item = JSON.parse(line);
+            if (item.event === 'message' && item.message) {
+              const parsed = JSON.parse(item.message);
+              if (parsed && parsed.claims && (!latestPayload || parsed.updatedAt >= latestPayload.updatedAt)) {
+                latestPayload = parsed;
               }
             }
-          }
-        } catch (e) {
-          console.error('解析远程广播失败:', e);
+          } catch (e) {}
         }
-      });
+
+        if (latestPayload) {
+          applyStateIfNewer(latestPayload, !isBackground);
+        } else if (!isBackground) {
+          updateSyncStatus(`云端实时联机已就绪 [${roomId}]`, true);
+        }
+      } catch (err) {
+        if (!isBackground) {
+          updateSyncStatus(`网络受阻，已启用本地保护 [${roomId}]`, false);
+        }
+      }
     }
 
-    // 将打卡改动广播给网络上的所有同事
-    function broadcastState(senderTeamName) {
-      saveLocalRoomState(currentRoomId, gameState.claims);
+    // 处理收到的云端广播
+    function handleIncomingMessage(rawMessage) {
+      try {
+        const payload = JSON.parse(rawMessage);
+        if (!payload || !payload.claims) return;
+        applyStateIfNewer(payload, true);
+      } catch (e) {
+        console.error('处理广播消息失败:', e);
+      }
+    }
+
+    // 对比时间戳并合并应用最新棋盘状态
+    function applyStateIfNewer(remotePayload, notify = false) {
+      const currentStamp = gameState.updatedAt || 0;
+      const remoteStamp = remotePayload.updatedAt || 0;
+
+      // 如果远程数据更新，或者本地为空
+      if (remoteStamp > currentStamp || Object.keys(gameState.claims).length === 0) {
+        const isFromOther = remotePayload.senderId && remotePayload.senderId !== localUserId;
+        gameState.claims = remotePayload.claims || {};
+        gameState.updatedAt = remoteStamp;
+        saveLocalRoomState(currentRoomId, gameState.claims, gameState.updatedAt);
+        renderBingoMatrix();
+
+        if (isFromOther && notify) {
+          const name = remotePayload.senderTeamName || '队友';
+          showToast(`🔔 同事【${name}】同步了最新打卡！`);
+        }
+      }
+    }
+
+    // 向公共云端信道广播当前状态
+    async function broadcastState(senderTeamName) {
+      const now = Date.now();
+      gameState.updatedAt = now;
+      saveLocalRoomState(currentRoomId, gameState.claims, now);
       renderBingoMatrix();
 
-      if (roomRef) {
-        try {
-          const payload = JSON.stringify({
-            claims: gameState.claims,
-            senderId: localUserId,
-            senderTeamName: senderTeamName || '',
-            timestamp: Date.now()
-          });
-          roomRef.put({ payload: payload });
-        } catch (e) {
-          console.error('广播数据失败:', e);
-        }
+      const payload = {
+        claims: gameState.claims,
+        updatedAt: now,
+        senderId: localUserId,
+        senderTeamName: senderTeamName || '队员',
+        roomId: currentRoomId
+      };
+
+      const topic = getChannelTopic(currentRoomId);
+      try {
+        await fetch(`https://ntfy.sh/${topic}`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          headers: {
+            'Title': 'BINGO_UPDATE',
+            'Priority': 'urgent'
+          }
+        });
+        updateSyncStatus(`云端已同步 [${currentRoomId}]`, true);
+      } catch (e) {
+        console.warn('云端广播暂时失败，已先保存在本地:', e);
+        updateSyncStatus(`广播稍有延迟，重试中... [${currentRoomId}]`, false);
       }
     }
 
@@ -575,12 +637,12 @@
       url.searchParams.set('room', currentRoomId);
       window.history.replaceState({}, '', url.toString());
 
-      gameState.claims = loadLocalRoomState(currentRoomId);
+      const local = loadLocalRoomState(currentRoomId);
+      gameState.claims = local.claims || {};
+      gameState.updatedAt = local.updatedAt || 0;
       renderBingoMatrix();
 
-      if (gun) {
-        subscribeToRoom(currentRoomId);
-      }
+      setupChannelConnection(currentRoomId);
       showToast(`已切换至房间：${currentRoomId}`);
     };
 
@@ -596,9 +658,9 @@
       tempInput.select();
       try {
         document.execCommand('copy');
-        showToast(`🔗 房间【${currentRoomId}】异地联机链接已复制！发给同事即可直接同步`);
+        showToast(`🔗 房间【${currentRoomId}】联机邀请链接已复制！直接发给同事即可自动同步`);
       } catch (e) {
-        showToast('复制失败，请直接复制浏览器地址栏网址');
+        showToast('请直接复制当前浏览器地址栏发送给同事');
       }
       document.body.removeChild(tempInput);
     };
@@ -820,7 +882,7 @@
       document.getElementById('mProofInput').value = '';
       broadcastState(TEAMS[modalSelectedTeam].name);
       closeTaskModal();
-      showToast(`🎉 恭喜【${TEAMS[modalSelectedTeam].name}】成功抢占！已实时同步所有异地队友`);
+      showToast(`🎉 恭喜【${TEAMS[modalSelectedTeam].name}】抢占成功！已同步至云端`);
 
       confetti({ particleCount: 70, spread: 60, origin: { y: 0.65 } });
     };
@@ -902,7 +964,7 @@
 
     window.executeReset = function() {
       gameState.claims = {};
-      saveLocalRoomState(currentRoomId, {});
+      saveLocalRoomState(currentRoomId, {}, Date.now());
       broadcastState('系统管理员');
       closeResetModal();
       showToast('战局已成功清空！异地所有设备同步刷新');
@@ -923,11 +985,31 @@
       }, 2500);
     }
 
-    // 启动
+    // 监听同一电脑跨标签页存储联动
+    window.addEventListener('storage', (e) => {
+      if (e.key === LOCAL_STORAGE_PREFIX + currentRoomId && e.newValue) {
+        try {
+          const data = JSON.parse(e.newValue);
+          gameState.claims = data.claims || {};
+          gameState.updatedAt = data.updatedAt || Date.now();
+          renderBingoMatrix();
+        } catch (err) {}
+      }
+    });
+
+    // 启动入口
     window.addEventListener('DOMContentLoaded', () => {
       initRoomIdFromUrl();
       switchActiveTeam(1);
-      initRealtimeNetwork();
+
+      // 加载本地旧数据先显示
+      const local = loadLocalRoomState(currentRoomId);
+      gameState.claims = local.claims || {};
+      gameState.updatedAt = local.updatedAt || 0;
+      renderBingoMatrix();
+
+      // 连接云端实时通道
+      setupChannelConnection(currentRoomId);
     });
   </script>
 </body>
