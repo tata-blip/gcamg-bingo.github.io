@@ -6,6 +6,7 @@
   <title>异地3人组 4x4 抢占式 Bingo 打卡大作战</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -106,6 +107,9 @@
 
         <!-- 战局控制按钮 -->
         <div class="flex items-center gap-2 shrink-0">
+          <button onclick="openSyncModal()" class="px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 text-xs font-bold text-slate-700 hover:text-emerald-600 transition flex items-center gap-1.5" title="手动口令备份与导入">
+            <i class="fa-solid fa-cloud-arrow-up text-emerald-500"></i> 口令同步
+          </button>
           <button onclick="openRulesModal()" class="px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-orange-50 border border-slate-200 text-xs font-bold text-slate-700 hover:text-orange-600 transition flex items-center gap-1.5">
             <i class="fa-solid fa-circle-question text-orange-500"></i> 规则
           </button>
@@ -118,8 +122,8 @@
       <!-- 实时联机连接状态与在线信息条 -->
       <div class="mt-2.5 flex items-center justify-center gap-3 text-[11px] font-bold text-slate-500">
         <span class="inline-flex items-center gap-1.5">
-          <span id="syncStatusDot" class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-          <span id="syncStatusText" class="text-emerald-700">云端联机同步中</span>
+          <span id="syncStatusDot" class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+          <span id="syncStatusText" class="text-amber-700">正在接入高可用实时网络...</span>
         </span>
         <span>•</span>
         <span class="truncate max-w-[200px]" title="当前设备用户 ID">玩家ID: <span id="currentUserIdText" class="font-mono text-slate-600">--</span></span>
@@ -349,20 +353,42 @@
   </div>
 
   <!-- 重置棋盘安全确认弹窗 (替代原生 confirm) -->
-  <div id="resetConfirmModal" class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-all duration-300">
-    <div class="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl relative text-center">
-      <div class="w-12 h-12 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center text-xl mx-auto mb-3">
-        <i class="fa-solid fa-triangle-exclamation"></i>
+  <!-- 手动口令同步弹窗 (针对极严网络环境的终极保障) -->
+  <div id="syncModal" class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-all duration-300">
+    <div class="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl relative">
+      <button onclick="closeSyncModal()" class="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center transition">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+
+      <div class="flex items-center gap-2.5 mb-3">
+        <span class="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-lg font-black">
+          <i class="fa-solid fa-arrows-rotate"></i>
+        </span>
+        <div>
+          <h3 class="text-base font-black text-slate-900">战局口令极速同步</h3>
+          <p class="text-xs text-slate-500">适用于极密企业防火墙或网络不稳时</p>
+        </div>
       </div>
-      <h3 class="text-base font-black text-slate-900 mb-1">确定要重置当前房间战局吗？</h3>
-      <p class="text-xs text-slate-500 mb-5">此操作将清空该房间所有队伍的抢占记录，异地所有成员都会同步清空。</p>
-      <div class="flex items-center justify-center gap-2">
-        <button onclick="closeResetModal()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 text-xs font-bold transition">
-          取消
-        </button>
-        <button onclick="executeReset()" class="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold shadow-md shadow-rose-200 transition">
-          确定重置全盘
-        </button>
+
+      <div class="space-y-3.5 text-xs">
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">当前棋盘同步口令：</label>
+          <div class="flex gap-2">
+            <input id="syncCodeOutput" type="text" readonly class="flex-1 bg-slate-100 border border-slate-200 px-3 py-2 rounded-xl font-mono text-slate-600 text-xs select-all focus:outline-none" />
+            <button onclick="copySyncCode()" class="px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold shrink-0 shadow-sm transition">
+              复制口令
+            </button>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-1">直接把这串口令发给微信/钉钉里的异地同事。</p>
+        </div>
+
+        <div class="pt-2 border-t border-slate-100">
+          <label class="block font-bold text-slate-700 mb-1">导入同事发来的口令：</label>
+          <textarea id="syncCodeInput" rows="2" placeholder="在此粘贴同事发给你的同步口令..." class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition resize-none"></textarea>
+          <button onclick="applySyncCode()" class="w-full mt-2 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl shadow-md transition">
+            一键载入最新战局
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -414,8 +440,15 @@
     let currentModalTaskId = null;
     let modalSelectedTeam = 1;
     let currentRoomId = 'TEAM-888';
-    let eventSource = null;
-    let pollIntervalTimer = null;
+    let mqttClient = null;
+    let currentBrokerIndex = 0;
+
+    // 多条高可用国内与全球 WebSocket MQTT 节点备选列表
+    const MQTT_BROKERS = [
+      'wss://broker.emqx.io:8084/mqtt',      // 国内直连极佳（EMQ 杭州）
+      'wss://broker.hivemq.com:8884/mqtt',   // 全球备用节点
+      'wss://test.mosquitto.org:8081/mqtt'   // 备用开源节点
+    ];
 
     const LOCAL_STORAGE_PREFIX = 'bingo_remote_room_';
 
@@ -458,119 +491,93 @@
       } catch (e) {}
     }
 
-    function updateSyncStatus(msg, isOnline) {
+    function updateSyncStatus(msg, statusLevel) {
       const text = document.getElementById('syncStatusText');
       const dot = document.getElementById('syncStatusDot');
       if (!text || !dot) return;
       text.textContent = msg;
-      if (isOnline) {
-        text.className = 'text-emerald-700';
-        dot.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-ping';
+      if (statusLevel === 'online') {
+        text.className = 'text-emerald-700 font-bold';
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping';
+      } else if (statusLevel === 'connecting') {
+        text.className = 'text-amber-700 font-bold';
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse';
       } else {
-        text.className = 'text-amber-700';
-        dot.className = 'w-2 h-2 rounded-full bg-amber-500';
+        text.className = 'text-rose-600 font-bold';
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-rose-500';
       }
     }
 
-    // 获取当前房间在公共云端通道的 Topic 名字（带项目专属前缀防止撞名）
-    function getChannelTopic(roomId) {
-      const sanitized = roomId.toLowerCase().replace(/[^a-z0-9_-]/g, '');
-      return `bingo_gcamg_${sanitized || 'team888'}`;
+    function getTopicName(roomId) {
+      const clean = roomId.toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'team888';
+      return `bingo_gcamg/v2/room_${clean}`;
     }
 
-    // 核心网络同步：建立 SSE 监听与云端拉取
+    // 核心：基于 EMQX / WebSocket 的全双工多端云同步
     function setupChannelConnection(roomId) {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-      if (pollIntervalTimer) {
-        clearInterval(pollIntervalTimer);
-        pollIntervalTimer = null;
+      if (mqttClient) {
+        try { mqttClient.end(true); } catch (e) {}
+        mqttClient = null;
       }
 
-      const topic = getChannelTopic(roomId);
-      updateSyncStatus(`正在连接房间 [${roomId}]...`, false);
+      const brokerUrl = MQTT_BROKERS[currentBrokerIndex];
+      const topic = getTopicName(roomId);
 
-      // 1. 立即拉取最近的历史消息（确保刚打开或刷新的用户能读到最新战局）
-      fetchLatestHistory(topic, roomId);
+      updateSyncStatus(`正在连接云端实时通道...`, 'connecting');
 
-      // 2. 建立 SSE (Server-Sent Events) 实时长连接监听
+      if (typeof mqtt === 'undefined') {
+        console.warn('MQTT 脚本未就绪，使用本地保护模式');
+        updateSyncStatus('实时模块就绪中，已开启本地离线保护', 'connecting');
+        return;
+      }
+
       try {
-        eventSource = new EventSource(`https://ntfy.sh/${topic}/sse`);
-        
-        eventSource.onopen = () => {
-          updateSyncStatus(`云端实时联机已就绪 [${roomId}]`, true);
-        };
+        mqttClient = mqtt.connect(brokerUrl, {
+          clientId: `bingo_${localUserId}_${Math.random().toString(16).slice(2, 6)}`,
+          clean: true,
+          connectTimeout: 5000,
+          reconnectPeriod: 3000,
+          keepalive: 45
+        });
 
-        eventSource.onmessage = (event) => {
-          if (!event.data) return;
+        mqttClient.on('connect', () => {
+          updateSyncStatus(`🟢 云端实时联机就绪 [${roomId}]`, 'online');
+          // 订阅房间频道
+          mqttClient.subscribe(topic, { qos: 1 }, (err) => {
+            if (err) console.warn('订阅失败:', err);
+          });
+        });
+
+        mqttClient.on('message', (incomingTopic, messageBuffer) => {
+          if (incomingTopic !== topic) return;
           try {
-            const data = JSON.parse(event.data);
-            if (data.event === 'message' && data.message) {
-              handleIncomingMessage(data.message);
+            const raw = messageBuffer.toString();
+            const payload = JSON.parse(raw);
+            if (payload && payload.claims) {
+              applyStateIfNewer(payload, true);
             }
           } catch (e) {
-            console.warn('解析实时消息异常:', e);
+            console.warn('解析云端消息异常:', e);
           }
-        };
+        });
 
-        eventSource.onerror = () => {
-          updateSyncStatus(`实时连接恢复中... [${roomId}]`, false);
-        };
+        mqttClient.on('error', (err) => {
+          console.warn('MQTT 连接异常:', err);
+          tryNextBroker();
+        });
+
+        mqttClient.on('close', () => {
+          updateSyncStatus(`网络恢复中 [${roomId}]...`, 'connecting');
+        });
       } catch (err) {
-        console.warn('SSE 建立失败，降级为轮询模式:', err);
-      }
-
-      // 3. 定时轮询兜底（每 8 秒拉取一次，防止某些移动端浏览器切后台后断开长连接）
-      pollIntervalTimer = setInterval(() => {
-        fetchLatestHistory(topic, roomId, true);
-      }, 8000);
-    }
-
-    // 拉取历史消息
-    async function fetchLatestHistory(topic, roomId, isBackground = false) {
-      try {
-        const resp = await fetch(`https://ntfy.sh/${topic}/json?poll=1`);
-        if (!resp.ok) return;
-        const text = await resp.text();
-        const lines = text.trim().split('\n');
-
-        let latestPayload = null;
-        for (const line of lines) {
-          if (!line) continue;
-          try {
-            const item = JSON.parse(line);
-            if (item.event === 'message' && item.message) {
-              const parsed = JSON.parse(item.message);
-              if (parsed && parsed.claims && (!latestPayload || parsed.updatedAt >= latestPayload.updatedAt)) {
-                latestPayload = parsed;
-              }
-            }
-          } catch (e) {}
-        }
-
-        if (latestPayload) {
-          applyStateIfNewer(latestPayload, !isBackground);
-        } else if (!isBackground) {
-          updateSyncStatus(`云端实时联机已就绪 [${roomId}]`, true);
-        }
-      } catch (err) {
-        if (!isBackground) {
-          updateSyncStatus(`网络受阻，已启用本地保护 [${roomId}]`, false);
-        }
+        console.warn('初始化 MQTT 异常:', err);
+        tryNextBroker();
       }
     }
 
-    // 处理收到的云端广播
-    function handleIncomingMessage(rawMessage) {
-      try {
-        const payload = JSON.parse(rawMessage);
-        if (!payload || !payload.claims) return;
-        applyStateIfNewer(payload, true);
-      } catch (e) {
-        console.error('处理广播消息失败:', e);
-      }
+    function tryNextBroker() {
+      currentBrokerIndex = (currentBrokerIndex + 1) % MQTT_BROKERS.length;
+      updateSyncStatus(`正在切换至备用信道 (${currentBrokerIndex + 1}/${MQTT_BROKERS.length})...`, 'connecting');
     }
 
     // 对比时间戳并合并应用最新棋盘状态
@@ -578,7 +585,7 @@
       const currentStamp = gameState.updatedAt || 0;
       const remoteStamp = remotePayload.updatedAt || 0;
 
-      // 如果远程数据更新，或者本地为空
+      // 如果远程数据较新，或本地为空
       if (remoteStamp > currentStamp || Object.keys(gameState.claims).length === 0) {
         const isFromOther = remotePayload.senderId && remotePayload.senderId !== localUserId;
         gameState.claims = remotePayload.claims || {};
@@ -593,8 +600,8 @@
       }
     }
 
-    // 向公共云端信道广播当前状态
-    async function broadcastState(senderTeamName) {
+    // 向公共云端信道广播当前状态 (采用 retain: true 确保后来者立即收到)
+    function broadcastState(senderTeamName) {
       const now = Date.now();
       gameState.updatedAt = now;
       saveLocalRoomState(currentRoomId, gameState.claims, now);
@@ -608,20 +615,14 @@
         roomId: currentRoomId
       };
 
-      const topic = getChannelTopic(currentRoomId);
-      try {
-        await fetch(`https://ntfy.sh/${topic}`, {
-          method: 'POST',
-          body: JSON.stringify(payload),
-          headers: {
-            'Title': 'BINGO_UPDATE',
-            'Priority': 'urgent'
+      if (mqttClient && mqttClient.connected) {
+        const topic = getTopicName(currentRoomId);
+        // retain: true 极度关键，让后来打开网页的同事能瞬间获取最新战局
+        mqttClient.publish(topic, JSON.stringify(payload), { qos: 1, retain: true }, (err) => {
+          if (!err) {
+            updateSyncStatus(`🟢 实时已同步 [${currentRoomId}]`, 'online');
           }
         });
-        updateSyncStatus(`云端已同步 [${currentRoomId}]`, true);
-      } catch (e) {
-        console.warn('云端广播暂时失败，已先保存在本地:', e);
-        updateSyncStatus(`广播稍有延迟，重试中... [${currentRoomId}]`, false);
       }
     }
 
@@ -658,11 +659,73 @@
       tempInput.select();
       try {
         document.execCommand('copy');
-        showToast(`🔗 房间【${currentRoomId}】联机邀请链接已复制！直接发给同事即可自动同步`);
+        showToast(`🔗 房间【${currentRoomId}】联机链接已复制！同事点开即加入同屏`);
       } catch (e) {
-        showToast('请直接复制当前浏览器地址栏发送给同事');
+        showToast('请复制浏览器上方地址栏发送给同事');
       }
       document.body.removeChild(tempInput);
+    };
+
+    // 战局口令备用同步（100% 解决极端防火墙环境）
+    window.openSyncModal = function() {
+      const modal = document.getElementById('syncModal');
+      const output = document.getElementById('syncCodeOutput');
+      const payload = {
+        claims: gameState.claims,
+        updatedAt: gameState.updatedAt || Date.now(),
+        roomId: currentRoomId
+      };
+      try {
+        output.value = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+      } catch (e) {
+        output.value = JSON.stringify(payload);
+      }
+      modal.classList.remove('opacity-0', 'pointer-events-none');
+    };
+
+    window.closeSyncModal = function() {
+      document.getElementById('syncModal').classList.add('opacity-0', 'pointer-events-none');
+    };
+
+    window.copySyncCode = function() {
+      const output = document.getElementById('syncCodeOutput');
+      output.select();
+      try {
+        document.execCommand('copy');
+        showToast('📋 战局口令已复制！直接粘贴给微信/钉钉里的同事');
+      } catch (e) {
+        showToast('请手动长按复制框内文字');
+      }
+    };
+
+    window.applySyncCode = function() {
+      const input = document.getElementById('syncCodeInput').value.trim();
+      if (!input) {
+        showToast('请先粘贴同步口令！');
+        return;
+      }
+      try {
+        let decodedStr = input;
+        try {
+          decodedStr = decodeURIComponent(escape(atob(input)));
+        } catch (e) {}
+
+        const parsed = JSON.parse(decodedStr);
+        if (parsed && parsed.claims) {
+          gameState.claims = parsed.claims;
+          gameState.updatedAt = Date.now();
+          saveLocalRoomState(currentRoomId, gameState.claims, gameState.updatedAt);
+          broadcastState('口令同步');
+          renderBingoMatrix();
+          closeSyncModal();
+          showToast('✅ 已成功导入最新战局！');
+          confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
+        } else {
+          showToast('口令格式有误，请核对后重试');
+        }
+      } catch (err) {
+        showToast('口令解析失败，请确认是否完整复制');
+      }
     };
 
     // 队伍选择
@@ -985,30 +1048,18 @@
       }, 2500);
     }
 
-    // 监听同一电脑跨标签页存储联动
-    window.addEventListener('storage', (e) => {
-      if (e.key === LOCAL_STORAGE_PREFIX + currentRoomId && e.newValue) {
-        try {
-          const data = JSON.parse(e.newValue);
-          gameState.claims = data.claims || {};
-          gameState.updatedAt = data.updatedAt || Date.now();
-          renderBingoMatrix();
-        } catch (err) {}
-      }
-    });
-
     // 启动入口
     window.addEventListener('DOMContentLoaded', () => {
       initRoomIdFromUrl();
       switchActiveTeam(1);
 
-      // 加载本地旧数据先显示
+      // 加载本地旧数据先展示
       const local = loadLocalRoomState(currentRoomId);
       gameState.claims = local.claims || {};
       gameState.updatedAt = local.updatedAt || 0;
       renderBingoMatrix();
 
-      // 连接云端实时通道
+      // 连接国内直连高可用实时通道
       setupChannelConnection(currentRoomId);
     });
   </script>
