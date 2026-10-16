@@ -150,13 +150,13 @@
         </div>
       </div>
 
-      <!-- 队伍 B: Bing星河战舰 -->
+      <!-- 队伍 B: Bing星河战舰队 -->
       <div id="cardTeam2" onclick="switchActiveTeam(2)" class="cursor-pointer bg-white rounded-2xl p-3 sm:p-4 border-2 transition-all relative shadow-sm hover:shadow-md">
         <div class="flex items-center justify-between mb-1.5">
           <div class="flex items-center gap-2">
             <span class="w-8 h-8 rounded-xl bg-team2 text-white flex items-center justify-center font-black text-sm shadow-sm">B</span>
             <div>
-              <h3 class="font-black text-xs sm:text-sm text-slate-800">队 B · Bing星河战舰</h3>
+              <h3 class="font-black text-xs sm:text-sm text-slate-800">队 B · Bing星河战舰队</h3>
               <p class="text-[11px] text-slate-500">占领 <span id="teamCount2" class="font-black text-team2">0</span> 格</p>
             </div>
           </div>
@@ -280,7 +280,7 @@
                   A 队 (Ryan闪电破风队)
                 </button>
                 <button type="button" onclick="selectFormTeam(2)" id="btnPick2" class="py-2 px-2 rounded-xl text-xs font-black border transition flex flex-col items-center gap-1">
-                  B 队 (Bing星河战舰)
+                  B 队 (Bing星河战舰队)
                 </button>
                 <button type="button" onclick="selectFormTeam(3)" id="btnPick3" class="py-2 px-2 rounded-xl text-xs font-black border transition flex flex-col items-center gap-1">
                   C 队 (Nic赤焰先锋队)
@@ -423,7 +423,7 @@
     // 队伍配置
     const TEAMS = {
       1: { id: 1, name: '队 A · Ryan闪电破风队', code: 'A', bg: 'bg-team1', text: 'text-team1', border: 'border-team1', light: 'bg-pink-50' },
-      2: { id: 2, name: '队 B · Bing星河战舰', code: 'B', bg: 'bg-team2', text: 'text-team2', border: 'border-team2', light: 'bg-emerald-50' },
+      2: { id: 2, name: '队 B · Bing星河战舰队', code: 'B', bg: 'bg-team2', text: 'text-team2', border: 'border-team2', light: 'bg-emerald-50' },
       3: { id: 3, name: '队 C · Nic赤焰先锋队', code: 'C', bg: 'bg-team3', text: 'text-team3', border: 'border-team3', light: 'bg-sky-50' }
     };
 
